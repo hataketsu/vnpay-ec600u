@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+
+# Session logs: they carry the module IMEI, the ESP MAC and, in mqtt_test.log,
+# the WiFi credentials that were passed to AT+CWJAP.
+logs/
+
+# The stock firmware read out of the board's SPI NOR. It is VNPay's, not ours.
+nor_backup.bin
+*.bin
+
+# Real WiFi credentials live here; wifi_config.example.py is the template.
+wifi_config.py
