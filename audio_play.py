@@ -129,7 +129,8 @@ if __name__ == "__main__":
                    help="set_channel() argument, or - to skip the call")
     p.add_argument("--rounds", type=int, default=1)
     p.add_argument("--seconds", type=int, default=31,
-                   help="how long each round is held; long.mp3 runs 30 s")
+                   help="how long each round is held; say.mp3 runs 3.2 s and "
+                        "long.mp3 runs 75 s")
     p.add_argument("--volume", type=int, default=1,
                    help="0-11. 1 is already loud - the HT8313 adds a fixed "
                         "28 dB that setVolume cannot touch")

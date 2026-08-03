@@ -1,0 +1,209 @@
+<!doctype html>
+<!-- Laptop-side panel for the VNPay EC600U box.
+
+     browser --WSS--> broker.emqx.io <--TCP-- ESP8285 <--UART2--> EC600U
+
+     Open the file directly; there is no server to run. The box publishes to
+     <prefix>/state and listens on <prefix>/cmd - see onboard/box_mqtt.py.
+
+     The broker is public and unauthenticated: anyone with the prefix can read
+     the box and drive it. Fine for a demo, not for anything else. -->
+<meta charset="utf-8">
+<title>VNPay EC600U — box panel</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<style>
+  :root {
+    --bg: #0e1013; --fg: #e8eaed; --dim: #9aa2ad; --line: #3a3f47;
+    --accent: #4ade80; --warn: #f59e0b; --dead: #6b7280;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f6f7f9; --fg: #14161a; --dim: #5c636e; --line: #d3d7dd; }
+  }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0;
+         background: var(--bg); color: var(--fg); }
+  main { max-width: 620px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 17px; margin: 0 0 2px; }
+  .sub { color: var(--dim); font-size: 12px; margin-bottom: 18px; }
+  .bar { display: flex; gap: 8px; margin-bottom: 18px; }
+  input[type=text] { flex: 1; min-width: 0; font: 12px ui-monospace, monospace;
+    padding: 7px 9px; border-radius: 7px; border: 1px solid var(--line);
+    background: transparent; color: inherit; }
+  button { font: 600 13px system-ui; padding: 7px 14px; border-radius: 7px;
+    border: 1px solid var(--line); background: transparent; color: inherit;
+    cursor: pointer; }
+  button:hover { border-color: var(--fg); }
+  button:disabled { opacity: .4; cursor: default; }
+  .card { border: 1px solid var(--line); border-radius: 11px;
+          padding: 14px 16px; margin-bottom: 12px; }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+             color: var(--dim); margin: 0 0 10px; font-weight: 600; }
+  .big { font-size: 30px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .unit { font-size: 13px; color: var(--dim); font-weight: 400; }
+  .gauge { height: 7px; border-radius: 4px; background: var(--line);
+           overflow: hidden; margin-top: 10px; }
+  .gauge > i { display: block; height: 100%; background: var(--accent);
+               width: 0; transition: width .4s; }
+  .btns { display: flex; gap: 8px; }
+  .btn { flex: 1; text-align: center; padding: 12px 0; border-radius: 8px;
+         border: 1px solid var(--line); color: var(--dim);
+         font-weight: 650; font-size: 15px; transition: .12s; }
+  .btn.on { border-color: var(--accent); color: var(--accent);
+            background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .vol { display: flex; align-items: center; gap: 12px; }
+  .vol .big { min-width: 52px; }
+  .steps { display: flex; gap: 3px; flex: 1; }
+  .steps > i { flex: 1; height: 22px; border-radius: 3px;
+               background: var(--line); }
+  .steps > i.on { background: var(--accent); }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+         background: var(--dead); margin-right: 6px; vertical-align: middle; }
+  .dot.live { background: var(--accent); }
+  .note { color: var(--dim); font-size: 12px; margin-top: 14px; }
+  code { font-family: ui-monospace, monospace; }
+</style>
+
+<main>
+  <h1>EC600U box panel</h1>
+  <div class="sub"><span class="dot" id="dot"></span><span id="status">not
+    connected</span></div>
+
+  <div class="bar">
+    <!-- The box picks its own suffix at first boot and stores it in
+         /usr/mqtt_id.txt; it also logs it at startup. This one is the board
+         this was developed against. -->
+    <input type="text" id="prefix" placeholder="vnpay-ec600u/xxxxxx"
+           value="vnpay-ec600u/c55fa" spellcheck="false">
+    <button id="go">Connect</button>
+  </div>
+
+  <div class="card">
+    <h2>Battery</h2>
+    <div><span class="big" id="pct">—</span><span class="unit"> %</span>
+      <span class="unit" id="mv"></span></div>
+    <div class="gauge"><i id="gauge"></i></div>
+    <div class="note">While USB is plugged in this tracks the charger, not the
+      cell.</div>
+  </div>
+
+  <div class="card">
+    <h2>Buttons</h2>
+    <div class="btns">
+      <div class="btn" id="bM">M</div>
+      <div class="btn" id="bP">+</div>
+      <div class="btn" id="bN">−</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Volume</h2>
+    <div class="vol">
+      <button id="down" disabled>−</button>
+      <span class="big" id="vol">—</span>
+      <div class="steps" id="steps"></div>
+      <button id="up" disabled>+</button>
+    </div>
+    <div class="note">Each change plays a beep at the new level. 1 of 11 is
+      already loud — the amplifier adds a fixed 28 dB.</div>
+  </div>
+
+  <div class="card">
+    <h2>Actions</h2>
+    <div class="btns">
+      <button id="ping" disabled>Beep</button>
+      <button id="say" disabled>Play say.mp3</button>
+      <button id="led" disabled>Toggle LED</button>
+    </div>
+  </div>
+
+  <div class="note" id="seen"></div>
+</main>
+
+<script>
+const BROKER = "wss://broker.emqx.io:8084/mqtt";
+const $ = id => document.getElementById(id);
+
+let client = null, prefix = "", ledOn = 1, lastAt = 0;
+
+for (let i = 0; i < 12; i++) $("steps").appendChild(document.createElement("i"));
+
+$("prefix").value = localStorage.getItem("ec600u-prefix") || "";
+
+function setStatus(text, live) {
+  $("status").textContent = text;
+  $("dot").className = "dot" + (live ? " live" : "");
+  for (const id of ["up", "down", "ping", "say", "led"])
+    $(id).disabled = !live;
+}
+
+function send(cmd) {
+  if (client && client.connected) client.publish(prefix + "/cmd", cmd);
+}
+
+function render(s) {
+  lastAt = Date.now();
+  $("pct").textContent = s.pct;
+  $("mv").textContent = " · " + s.mv + " mV";
+  $("gauge").style.width = s.pct + "%";
+  $("gauge").style.background = s.pct < 20 ? "var(--warn)" : "var(--accent)";
+
+  const held = s.btn || "";
+  $("bM").className = "btn" + (held.includes("M") ? " on" : "");
+  $("bP").className = "btn" + (held.includes("+") ? " on" : "");
+  $("bN").className = "btn" + (held.includes("-") ? " on" : "");
+
+  $("vol").textContent = s.vol;
+  const steps = $("steps").children;
+  for (let i = 0; i < steps.length; i++)
+    steps[i].className = i <= s.vol ? "on" : "";
+
+  ledOn = s.led;
+  $("led").textContent = s.led ? "LED off" : "LED on";
+  $("seen").textContent = "box up " + s.up + " s · topic " + prefix;
+}
+
+function connect() {
+  prefix = $("prefix").value.trim().replace(/\/+$/, "");
+  if (!prefix) { setStatus("enter the topic prefix first", false); return; }
+  localStorage.setItem("ec600u-prefix", prefix);
+  if (client) client.end(true);
+
+  setStatus("connecting to broker…", false);
+  client = mqtt.connect(BROKER, {
+    clientId: "panel-" + Math.random().toString(16).slice(2, 8),
+    reconnectPeriod: 2000,
+  });
+
+  client.on("connect", () => {
+    client.subscribe(prefix + "/state");
+    setStatus("connected — waiting for the box", false);
+  });
+  client.on("close", () => setStatus("broker disconnected", false));
+  client.on("error", e => setStatus("broker error: " + e.message, false));
+  client.on("message", (_t, payload) => {
+    try {
+      render(JSON.parse(payload.toString()));
+      setStatus("box online", true);
+    } catch (e) { /* a partial or foreign message on a public broker */ }
+  });
+}
+
+// The box publishes every second; three missed in a row means it is gone.
+setInterval(() => {
+  if (lastAt && Date.now() - lastAt > 3500) {
+    setStatus("box silent — is it powered?", false);
+    lastAt = 0;
+  }
+}, 1000);
+
+$("go").onclick = connect;
+$("prefix").addEventListener("keydown", e => { if (e.key === "Enter") connect(); });
+$("up").onclick = () => send("vol=+1");
+$("down").onclick = () => send("vol=-1");
+$("ping").onclick = () => send("ping");
+$("say").onclick = () => send("play=say.mp3");
+$("led").onclick = () => send("led=" + (ledOn ? 0 : 1));
+
+if ($("prefix").value) connect();
+</script>

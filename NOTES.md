@@ -759,8 +759,31 @@ subdividing. 39 pins came down to GPIO13 in three power cycles.
   was never worked out — it rejects an empty call with `ValueError: Please
   enter complete parameters, including the gain corresponding to ID and volume
   (0-11)`.
-* `long.mp3` emitted an end event at 23.3 s in one run and no end event at all
-  in others, against a measured 30.0 s file. `say.mp3` is exact every time.
+## Resolved: long.mp3 "never ends"
+
+It ends fine. The file is **75.1 s**, not the 30.0 s an early measurement here
+claimed, so a 31 s window never reached it.
+
+That number was wrong because the MP3 parser used MPEG1 constants on MPEG2
+files. Both differ, and both matter:
+
+| | MPEG1 layer III | MPEG2 / 2.5 layer III |
+|---|---|---|
+| Samples per frame | 1152 | **576** |
+| Bitrate index 5 | 64 kbps | **40 kbps** |
+
+These files are MPEG2, mono, 16 kHz — so a frame is 36 ms, not 72 ms. With the
+right tables the frames tile the file exactly, last frame ending on the final
+byte, and the durations match what the board reports:
+
+| File | Parsed | Board's end event |
+|---|---|---|
+| `say.mp3` | 3.24 s | 3.43 s |
+| `beep.mp3` | 3.13 s | — |
+| `long.mp3` | 75.13 s | — |
+
+The residual ~0.2 s is encoder padding and decoder delay. `trim_mp3.py` has
+the corrected tables.
 
 ## Method note
 
@@ -915,3 +938,52 @@ externally-driven group GPIO23/24/35/36/40/41.
 This also **shrinks the amplifier hunt**. Sound was heard while sweeping
 5, 6, 8, 9, 15, 16, 17, 18; GPIO15 is the LED and GPIO16 is button "-", so the
 HT8313 shutdown pin is among **5, 6, 8, 9, 17, 18**.
+
+---
+
+# The box as an MQTT device
+
+With audio working and the ESP already proven on MQTT, the box runs standalone:
+red LED on at boot, battery and buttons published, volume driven from a laptop
+page. Nothing goes over USB.
+
+    browser --WSS--> broker.emqx.io <--TCP-- ESP8285 <--UART2--> EC600U
+
+`onboard/box_mqtt.py`, uploaded as `/usr/main.py`, so it starts with the
+module. `mqtt_panel.html` is the laptop side and needs no server - open the
+file. `mqtt_probe.py` does the same from a terminal, which matters because
+attaching the REPL sends ctrl-C and kills whatever `main.py` is doing.
+
+State on `<prefix>/state` every second and on every change; commands on
+`<prefix>/cmd` as one `key=value` per message — `vol=3`, `vol=+1`, `ping`,
+`play=say.mp3`, `led=0`.
+
+    {"mv":4180,"pct":97,"vol":1,"btn":"","led":1,"up":64}
+
+## Things worth knowing before changing it
+
+* **The broker is public and unauthenticated.** Anyone with the prefix can read
+  the box and drive it. The random suffix is obscurity, not security. The box
+  picks it at first boot and keeps it in `/usr/mqtt_id.txt`.
+* **`AT+MQTTPUBRAW`, not `AT+MQTTPUB`.** The state payload is JSON, full of
+  quotes and commas, which the quoted-string form mangles. PUBRAW takes a
+  length and then the bytes, like CIPSEND.
+* **`+MQTTSUBRECV:0,"topic",<len>,<data>` has to be parsed by length.** The
+  payload can hold commas and newlines, so splitting on them loses messages.
+* **Buttons need edge detection.** Polling level alone repeats the action for
+  as long as a button is held; volume walked itself to 0 the first time.
+* **Interrupt the previous beep.** `stopAll()` before playing the confirmation
+  tone, or holding `+` queues one beep per step and they play long after the
+  volume stopped moving.
+* `espnet.py` has to be uploaded too - `box_mqtt.py` imports it, and `/usr` is
+  not on `usys.path`, so the import only works after `usys.path.append('/usr')`.
+
+## The confirmation beep
+
+`beep.mp3` is 3.1 s of speech-like noise; cutting it short just gives a shorter
+piece of the same thing. `make_tone.py` synthesises a clean one instead - a
+sine with a 4 ms attack and an exponential decay, encoded to match what the
+module decodes (MPEG2, mono, 16 kHz). Without the envelope both ends click.
+
+There is no MP3 encoder in the standard library, so this needs `lame`
+(`brew install lame`, 1.9 MB). Generating the WAV is pure Python.

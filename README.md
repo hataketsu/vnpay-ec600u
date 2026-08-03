@@ -21,6 +21,8 @@ strap was found, every pin that was probed and what it turned out to be.
 * A GPIO control panel served **over WiFi by the board itself**, no USB in the
   path: `browser → ESP8285 → UART2 → EC600U → GPIO`
 * **Sound out of the speaker**, loud — `python3 audio_play.py`
+* **The box as a standalone MQTT device**: red LED on at boot, battery and
+  buttons published, volume driven from a laptop page, no USB in the path
 * Buttons, LED, and the SPI NOR identified
 * Driven from Linux or macOS; on macOS the REPL is reached over libusb
 
@@ -74,21 +76,55 @@ are for.
 ## Layout
 
 ```
-qpy.py              raw-REPL driver; everything else builds on it
-pinmap.py           pin metadata, one place
-audio_play.py       play an MP3 out loud
-ctrl_probe.py       hold pins high so the HT8313's CTRL can be metered
-gpio_panel.py       GPIO panel on http://localhost:8760 (drives the board over USB)
-onboard/esp_web.py  the same panel, but served by the board over WiFi
-onboard/nor.py      SPI NOR block device
-esp.py              ESP power, boot strap, ESP-AT channel
-upload.py           push a file to the module's /usr
-*_scan.py           the probes: buttons, LEDs, SPI, I2C, UARTs, boot straps
+qpy.py               raw-REPL driver; everything else builds on it
+pinmap.py            pin metadata, one place
+audio_play.py        play an MP3 out loud
+battery.py           read the cell voltage, estimate a percentage
+ctrl_probe.py        hold pins high so the HT8313's CTRL can be metered
+make_tone.py         synthesise a confirmation blip (needs lame)
+trim_mp3.py          cut an MP3 at a frame boundary, no re-encode
+mqtt_panel.html      laptop UI for the box, over MQTT; just open it
+mqtt_probe.py        the same over the terminal, for when main.py is running
+gpio_panel.py        GPIO panel on http://localhost:8760 (over USB)
+onboard/box_mqtt.py  the box as an MQTT device - upload as main.py
+onboard/espnet.py    ESP boot, WiFi, HTTP; shared by the on-board apps
+onboard/esp_web.py   GPIO panel served by the board itself over WiFi
+onboard/nor.py       SPI NOR block device
+esp.py               ESP power, boot strap, ESP-AT channel
+upload.py            push a file to the module's /usr
+*_scan.py            the probes: buttons, LEDs, SPI, I2C, UARTs, boot straps
 ```
 
 `pa_sweep.py`, `speaker_test.py` and `audio_path.py` predate the audio fix and
 hunt an enable pin while playing a tone that never made a sound. Kept for the
 record; use `audio_play.py`.
+
+## Running the box on its own
+
+```sh
+cp wifi_config.example.py wifi_config.py     # then edit it
+python3 upload.py wifi
+python3 upload.py onboard/espnet.py
+python3 upload.py onboard/box_mqtt.py main.py
+python3 -c "from qpy import Qpy; Qpy().exec('import misc; misc.Power.powerRestart()')"
+open mqtt_panel.html
+```
+
+The box lights the red LED, joins WiFi through the ESP, and publishes battery,
+button and volume state once a second. The panel connects to the same public
+broker over a WebSocket and can set the volume, play a file, or toggle the LED.
+The + and − buttons on the box do the same thing, each confirmed by a short
+beep at the new level.
+
+The topic prefix is `vnpay-ec600u/<id>`, where the box picks `<id>` at first
+boot and keeps it in `/usr/mqtt_id.txt`. It also logs it at startup.
+
+**The broker is public and unauthenticated.** Anyone who knows the prefix can
+read the box's state and drive it. That is fine for a demo and not fine for
+anything else — point `BROKER` at your own broker with credentials first.
+
+Attaching the REPL sends ctrl-C and kills `main.py`, so use `mqtt_probe.py`
+rather than `qpy.py` while the box is meant to stay up.
 
 ## Setup
 
