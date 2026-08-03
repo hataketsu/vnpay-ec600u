@@ -20,8 +20,9 @@ strap was found, every pin that was probed and what it turned out to be.
 * WiFi join and an MQTT publish/subscribe round trip, driven from the module
 * A GPIO control panel served **over WiFi by the board itself**, no USB in the
   path: `browser → ESP8285 → UART2 → EC600U → GPIO`
-* MP3 playback through `audio.Audio`
+* **Sound out of the speaker**, loud — `python3 audio_play.py`
 * Buttons, LED, and the SPI NOR identified
+* Driven from Linux or macOS; on macOS the REPL is reached over libusb
 
 ## Pin map
 
@@ -40,14 +41,43 @@ strap was found, every pin that was probed and what it turned out to be.
 Note this board is **active high** for both the buttons and the LED, the
 opposite of the related EC600M box.
 
-Still open: which pin holds the HT8313's shutdown line (narrowed to GPIO 5, 6,
-8, 9, 17, 18), and what GPIO 23, 24, 35, 36, 40, 41 are for.
+## Getting sound
+
+Two conditions, and both are needed:
+
+1. **GPIO13 high.** That is the HT8313's CTRL pin (module pin 2, `spi_0_di`).
+   Low, and the amplifier stays in shutdown: its charge pump never starts, so
+   PVDD, CP, CN and OUT± all sit at 0 V. Driving it puts CTRL at 1.8 V and
+   PVDD at 5 V — the module's 1.8 V domain clears the threshold, no level
+   shifter needed.
+2. **Codec routed to the loudspeaker**: `audio.Audio(2)` with `set_channel(2)`.
+   Left alone it biases SPK_P/SPK_N to 1.5 V and puts no signal on them, so the
+   amplifier has nothing to work with even when awake.
+
+```sh
+python3 audio_play.py say.mp3
+```
+
+Volume 1 of 11 is already loud — the HT8313 adds a fixed 28 dB that
+`setVolume` cannot reach. Only MP3 decodes; WAV stops after 270 ms and
+`aud_tone_play` is silent.
+
+**CTRL latches.** Once raised it stays at 1.8 V until the board loses power,
+and driving GPIO13 low does not clear it. So any run after the first appears to
+work with no pins at all. Test audio claims on a freshly powered board or they
+mean nothing.
+
+Still open: what holds CTRL up after the pin is released, whether `Audio(2)` or
+`set_channel(2)` is the operative half, and what GPIO 23, 24, 35, 36, 40, 41
+are for.
 
 ## Layout
 
 ```
-qpy.py              raw-REPL driver over USB serial; everything else builds on it
+qpy.py              raw-REPL driver; everything else builds on it
 pinmap.py           pin metadata, one place
+audio_play.py       play an MP3 out loud
+ctrl_probe.py       hold pins high so the HT8313's CTRL can be metered
 gpio_panel.py       GPIO panel on http://localhost:8760 (drives the board over USB)
 onboard/esp_web.py  the same panel, but served by the board over WiFi
 onboard/nor.py      SPI NOR block device
@@ -56,13 +86,25 @@ upload.py           push a file to the module's /usr
 *_scan.py           the probes: buttons, LEDs, SPI, I2C, UARTs, boot straps
 ```
 
+`pa_sweep.py`, `speaker_test.py` and `audio_path.py` predate the audio fix and
+hunt an enable pin while playing a tone that never made a sound. Kept for the
+record; use `audio_play.py`.
+
 ## Setup
 
 ```sh
-pip install pyserial
+pip install pyserial          # Linux
+pip install pyusb             # macOS, plus: brew install libusb
 cp wifi_config.example.py wifi_config.py   # then edit it
 python3 qpy.py                             # should print uos.uname()
 ```
+
+On Linux the module's interface .8 appears as a `/dev/ttyUSBn` because the
+`option` driver binds it. macOS has no driver for interface class 0xFF, so no
+device node is ever created — but nothing has claimed those interfaces either,
+so `qpy.py` takes interface .8 with libusb and speaks the same raw REPL over
+its bulk pair. No kext, no SIP changes. The interface number is fixed there,
+unlike the ttyUSB numbering.
 
 For the on-board WiFi panel:
 

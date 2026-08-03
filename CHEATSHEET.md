@@ -4,6 +4,20 @@ Everything here was run against this board. Anything not verified is marked.
 
 ## Which USB port is which
 
+### macOS
+
+There are no device nodes at all — macOS binds no driver to interface class
+0xFF, so `ls /dev/cu.*` shows nothing but Bluetooth. The interfaces are
+unclaimed, though, so `qpy.py` opens interface .8 with libusb directly and
+every tool here works unchanged. Needs `brew install libusb` and `pip install
+pyusb`; no kext, no SIP changes. Interface numbers are fixed, so nothing has to
+be re-resolved between runs.
+
+Endpoints, if you need them by hand: interface .8 is bulk **out 0x08, in 0x8b**;
+interface .2, the AT port, is **out 0x02, in 0x84**.
+
+### Linux
+
 The module presents 7 serial interfaces. **The ttyUSB numbers shift** whenever
 anything else is plugged or unplugged, so identify by USB *interface number*,
 not by the device name:
@@ -149,20 +163,60 @@ at(b'AT+MQTTSUB=0,"my/topic",1')
 at(b'AT+MQTTPUB=0,"my/topic","hello",1,0', 4000)
 ```
 
-### Audio — unverified
+### Audio — works, loud
 
-Accepted by the module, but nothing has confirmed sound reaches the speaker;
-the amplifier enable pin has not been found.
+Two conditions, both required. Miss either and the box is silent.
 
 ```python
+from machine import Pin
 import audio
-a = audio.Audio(0)
-a.setVolume(11)          # 0-11
-a.aud_tone_play(1, 5)    # (mode, seconds) - returns 0
-a.getState()
+
+# 1. GPIO13 is the HT8313's CTRL pin. Low = shutdown, charge pump never starts
+Pin(Pin.GPIO13, Pin.OUT, Pin.PULL_DISABLE, 1)
+
+# 2. route the codec at the loudspeaker - this is the part that was missing
+a = audio.Audio(2)
+a.set_channel(2)
+a.setVolume(1)           # 0-11, and 1 is already loud
+a.play(1, 0, 'U:/say.mp3')
 ```
 
-There is **no TTS** in this firmware: `audio.TTS` does not exist.
+From the laptop: `python3 audio_play.py say.mp3`.
+
+* **MP3 only.** WAV stops after 270 ms, and `aud_tone_play` returns 0 while
+  producing nothing — even with the amplifier awake.
+* **Volume 1 is loud.** The HT8313 adds a fixed 28 dB that `setVolume` cannot
+  reach; at 11 the speaker is overdriven into a continuous tone.
+* **CTRL latches.** Once raised it holds 1.8 V until the board loses power, and
+  driving GPIO13 low does not clear it. Every run after the first plays with no
+  pin driven at all, so test on a freshly powered board or you will fool
+  yourself.
+* `getState()` returns 0 throughout. Use `setCallback`: event 0 is start,
+  event 7 is end, and the end timestamp matches the file length exactly.
+* Without `set_channel(2)` the codec biases SPK_P/SPK_N to 1.5 V and puts
+  **0 mV AC** on them. Playback still reports success; nothing comes out.
+* There is **no TTS** in this firmware: `audio.TTS` does not exist. Anything
+  the box "says" has to be an MP3 already on `/usr`.
+
+### Battery
+
+```python
+import misc
+misc.Power.getVbatt()    # millivolts, e.g. 4162
+```
+
+No percentage API, and no ADC channel carries a battery divider. `battery.py`
+maps the voltage onto a Li-ion curve, but while USB is plugged in the reading
+follows the charger, not the cell.
+
+Handy meter readings on the HT8313, for when it goes quiet again:
+
+| Pin | Asleep | Awake |
+|---|---|---|
+| PVBAT / AVBAT | 5 V | 5 V |
+| CTRL | 0 V | 1.8 V |
+| PVDD | 0 V | 5 V |
+| IN+ / IN− | 0 V | 1.3 V each |
 
 ### SPI NOR — currently not responding
 

@@ -185,7 +185,7 @@ def pin_meta():
             "button": getattr(pinmap, "BUTTONS", {}).get(gpio, ""),
             "strap": gpio == getattr(pinmap, "ESP_STRAP", -1),
             "nor": gpio in getattr(pinmap, "NOR_SPI", ()),
-            "pa": gpio in getattr(pinmap, "PA_CANDIDATES", ()),
+            "pa": gpio == getattr(pinmap, "AMP_CTRL", -1),
             "led": getattr(pinmap, "LEDS", {}).get(gpio, ""),
         })
     return out

@@ -649,9 +649,137 @@ affect the ESP somehow, and was never followed up.
 
 ---
 
-# Audio: the module plays, nothing reaches the speaker
+# Audio: SOLVED — the speaker plays out loud
 
-## What actually works
+Two conditions have to hold at the same time. Every earlier attempt in this
+file satisfied at most one of them, which is why the box stayed silent through
+months of pin sweeps.
+
+```python
+from machine import Pin
+import audio
+
+# 1. wake the amplifier - GPIO13 is the HT8313's CTRL line
+Pin(Pin.GPIO13, Pin.OUT, Pin.PULL_DISABLE, 1)
+
+# 2. route the codec at the loudspeaker
+a = audio.Audio(2)
+a.set_channel(2)
+a.setVolume(1)          # 1 is already loud, see below
+a.play(1, 0, 'U:/say.mp3')
+```
+
+`audio_play.py` is this, from the laptop.
+
+**The routing is the part nobody had tried.** `set_channel` is never called
+anywhere else in this file. Without it the codec biases SPK_P/SPK_N to 1.5 V
+but puts no signal on them — measured as 0 mV AC across the pair while an MP3
+was demonstrably decoding — so the amplifier has nothing to amplify no matter
+what its enable pin is doing.
+
+**The enable pin is GPIO13**, module pin 2, default function `spi_0_di`. That
+is one of the four `spi_0` pins that every sweep in this repo skipped on
+purpose — `speaker_test.py` lists "10, 11, 12, 13 spi_0" under "pins
+deliberately left alone". Only SPI1 is wired here, to the NOR; spi_0 is free,
+and the board uses one of its pins for the amplifier. The single blind spot.
+
+**Volume 1 is already loud.** The HT8313 has a fixed 28 dB gain that
+`setVolume` cannot reach, so the top of the 0-11 range overdrives the speaker
+into what sounds like a continuous tone rather than audio. That tone was
+briefly mistaken for success.
+
+## Measured, with a meter on the HT8313
+
+The chip is 10-pin, not the 8-pin part the EC600M notes describe:
+**PVBAT, AVBAT, PVDD, IN+, IN−, OUT+, OUT−, CP, CN, CTRL**.
+
+| Pin | At rest | Amplifier awake |
+|---|---|---|
+| PVBAT, AVBAT | 5 V | 5 V — always powered, not off the switched rail |
+| **CTRL** | **0 V** | **1.8 V** |
+| PVDD | 0 V | 5 V — the internal charge pump only runs once CTRL is high |
+| CP, CN | 0 V | switching |
+| IN+, IN− | 0 V | 1.3 V each — the input stage self-biases |
+| OUT+, OUT− | 0 V | drives the speaker |
+
+One cause, four consequences: CTRL low keeps the charge pump down, so PVDD is
+absent, so the output bridge has no supply. Reading OUT+/OUT− at 0 V never
+meant a missing signal; it meant the chip was asleep.
+
+**1.8 V on CTRL is enough.** The module's GPIOs are a 1.8 V domain and the amp
+runs on 5 V, so a level shifter looked likely — PVDD coming up to 5 V proves
+it is not needed.
+
+Two things that confirmed the analog path before any sound was heard: the
+speaker measures **4 Ω** and is healthy, and once the amplifier was awake,
+*touching a meter probe to IN+/IN−* injected enough hum to make the speaker
+buzz audibly. Amplifier and speaker were fine all along.
+
+## CTRL latches, and that cost hours
+
+Once CTRL has been raised it **stays at 1.8 V until the board loses power**.
+Driving GPIO13 low again does not clear it. Neither does driving all 39 safe
+pins low and holding them there for five seconds. Whatever holds the node up
+is not the pin, and nothing in software brings it down.
+
+The practical damage: after one successful run, every later run appears to work
+with no pins driven at all, so the pin looks unnecessary. This produced two
+false "solved" conclusions before a full power cycle exposed it. **Any claim
+about what audio needs has to be tested on a freshly powered board.**
+
+It also shapes how the pin was found. Bisecting is asymmetric here: a negative
+result leaves CTRL at 0 V and the next subset can be tried immediately, but a
+positive result latches and the board has to be power-cycled before
+subdividing. 39 pins came down to GPIO13 in three power cycles.
+
+## Corrections to earlier work here
+
+* **"Sound was heard while sweeping 5, 6, 8, 9, 15, 16, 17, 18" never
+  happened.** No MP3 was ever audible before this. Everything built on that
+  sentence — including narrowing the HT8313 shutdown pin to 5, 6, 8, 9, 17, 18,
+  and `PA_CANDIDATES` in `pinmap.py` — was founded on nothing.
+* **The enable pin is real and is called CTRL**, contradicting the guess that
+  the PA is on by default and there was never a pin to find.
+* **`set_pa` does not mute anything.** `a.set_pa(15)` returned 1, and the
+  speaker worked later in the same session with no reboot in between. The
+  EC600M warning does not carry over.
+* **`aud_tone_play` still produces nothing** even with the amplifier awake and
+  the channel routed. MP3 only.
+
+## What is still open
+
+* **What holds CTRL up after GPIO13 is released**, and why driving it low does
+  not undo that. A diode or a transistor between pin and CTRL would explain a
+  one-way path; so would a latch inside the amplifier. Not investigated.
+* **Whether `audio.Audio(2)` or `set_channel(2)` is the operative half**, or
+  both. Both were changed at once and neither was tested alone on a freshly
+  powered board.
+* **`setGainTabel`** takes an ID and a gain per volume step and would reach
+  below what volume 0 gives, if the box is still too loud. Its call signature
+  was never worked out — it rejects an empty call with `ValueError: Please
+  enter complete parameters, including the gain corresponding to ID and volume
+  (0-11)`.
+* `long.mp3` emitted an end event at 23.3 s in one run and no end event at all
+  in others, against a measured 30.0 s file. `say.mp3` is exact every time.
+
+## Method note
+
+Every attempt before this one asked a human whether they could hear anything,
+and a silent result could mean the pin was wrong, the routing was wrong, the
+amplifier was dead, or the speaker was unplugged. Four unknowns, one bit of
+feedback per run, and no way to tell them apart.
+
+A meter on the amplifier's own pins collapses that. PVBAT said it had power.
+CTRL said it was asleep. PVDD following CTRL said the enable worked and 1.8 V
+logic was sufficient. IN+/IN− biasing said the input stage was alive, and
+buzzing under a probe said the speaker was too. Only then was silence
+diagnostic: everything downstream was proven good, so the fault had to be
+upstream, and 0 mV AC on SPK_P/SPK_N pointed at the codec.
+
+The same instrument then replaced listening entirely for the pin hunt. Reading
+CTRL is one unambiguous bit per run; hearing a tone is not.
+
+## Earlier findings that still hold
 
 MP3 playback runs correctly. The proof is the callback timing, not the return
 value:
@@ -667,19 +795,12 @@ error - that was wrong, and it sent the whole investigation sideways. With WAV
 and with `aud_tone_play` the 7 arrives after ~270 ms because those finish
 immediately, not because they fail.
 
-## Corrections to earlier work here
-
 * **WAV is not decoded** - it "plays" for 270 ms and stops. Only MP3 works.
   The EC600M notes already said this; it was not read carefully enough.
-* **`aud_tone_play` does nothing on this board** despite returning 0. Every
-  early silent test used it, so those results said nothing about the speaker.
-* **`set_pa` / `setSpeakerpaCallback` were called dozens of times** while
-  sweeping for an amplifier enable pin. The EC600M notes warn that touching the
-  PA API mutes the amplifier until reboot, and that the PA is on by default
-  after a clean boot - so there was probably never a pin to find, and the
-  sweeps may themselves have caused silence.
-* `pa_sweep.py`, `speaker_test.py` and `audio_path.py` were all built on those
-  wrong premises.
+* `pa_sweep.py`, `speaker_test.py` and `audio_path.py` were built on the
+  premise that an unfound enable pin was the whole problem. They sweep pins
+  while playing `aud_tone_play`, which is silent regardless. Superseded by
+  `audio_play.py` and `ctrl_probe.py`.
 
 ## What has been ruled out
 
@@ -696,18 +817,9 @@ immediately, not because they fail.
 
 Taken together the separate audio chip has no digital control interface the
 module can reach, which is what a plain class-D amplifier looks like: analog
-in, an enable pin, speaker out - the HT8313 on the EC600M board is exactly
-that.
-
-## What is left
-
-An enable pin, found by driving GPIOs while somebody listens - `speaker_test.py`
-does that, playing audio while walking each safe pin high and printing which
-one it is on. There is no way to detect it from the module, because the module
-cannot observe whether the amplifier is passing signal.
-
-Worth knowing before that: the marking on the audio chip. It decides whether
-there is an enable pin at all.
+in, an enable pin, speaker out. That reading was correct — the enable pin is
+CTRL, on GPIO13 — but the conclusion drawn from it, that finding the pin would
+produce sound, was not. The pin was only half the problem.
 
 ---
 

@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+.venv/
 
 # Session logs: they carry the module IMEI, the ESP MAC and, in mqtt_test.log,
 # the WiFi credentials that were passed to AT+CWJAP.

@@ -65,9 +65,15 @@ EXTERNALLY_DRIVEN = {2: "HIGH", 23: "LOW", 24: "LOW", 35: "LOW",
 
 ESP_STRAP = 26       # module pin 50, AP_READY - LOW lets the ESP flash-boot
 NOR_SPI = (1, 2, 4, 30)   # SPI1 to the 16 MB NOR; GPIO2 is its chip select
-# Sound was heard while sweeping this group, so the HT8313 shutdown pin is
-# one of them. Narrow it with pa_pin_hunt.py.
-PA_CANDIDATES = (5, 6, 8, 9, 15, 16, 17, 18)
+# The HT8313's CTRL pin. Driving it HIGH takes the amplifier out of shutdown:
+# CTRL 0 V -> 1.8 V and PVDD 0 V -> 5 V as the internal charge pump starts.
+# Found by bisecting with a meter on CTRL; see ctrl_probe.py.
+#
+# The old candidate list here was (5, 6, 8, 9, 15, 16, 17, 18), on the strength
+# of "sound was heard while sweeping this group". No sound was ever heard
+# before the amplifier was woken deliberately, so that grouping meant nothing -
+# and the answer was in spi_0, which every sweep had excluded on purpose.
+AMP_CTRL = 13
 
 ESP_EN = 44          # module pin 14 - drives the ESP8285 enable, active high
 ESP_UART = "UART2"   # module pins 31/32 -> ESP UART0
@@ -79,9 +85,7 @@ NOTES = {
     28: ("BUTTON M", "Button M. Active HIGH - pressed drives it high, released "
                      "floats. Read it with PULL_PD."),
     27: ("BUTTON +", "Button +. Active HIGH, same as M. Read with PULL_PD."),
-    16: ("BUTTON -", "Button -. Active HIGH. Also one of the pins that was "
-                     "live when sound was first heard, so it may double as the "
-                     "amplifier shutdown line - check before driving it."),
+    16: ("BUTTON -", "Button -. Active HIGH, same as M. Read with PULL_PD."),
     26: ("ESP BOOT STRAP", "Module pin 50, AP_READY. Hold LOW and the ESP "
                            "flash-boots; high or floating and it lands in UART "
                            "download mode."),
@@ -110,15 +114,8 @@ NOTES = {
     42: ("boot-high", "High at power-on, driven low by software ~2 s later."),
     46: ("boot-high", "High at power-on, driven low by software ~2 s later."),
     17: ("boot-high", "High at power-on, driven low by software ~2 s later."),
-    5:  ("audio?", "In the group that was live when sound was first heard."),
-    6:  ("audio?", "In the group that was live when sound was first heard."),
-    8:  ("audio?", "In the group that was live when sound was first heard."),
-    9:  ("audio?", "In the group that was live when sound was first heard."),
     15: ("LED red", "Lights the red LED when driven HIGH. Module pin 57, "
-                    "default function i2c_1_scl. Also sat in the group that "
-                    "was live when sound was first heard, so that grouping no "
-                    "longer implicates it in the audio path."),
-    18: ("audio?", "In the group that was live when sound was first heard."),
+                    "default function i2c_1_scl."),
 }
 
 # GPIOs that share a pad with another GPIO - only one of the pair can be
