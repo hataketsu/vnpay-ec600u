@@ -970,8 +970,14 @@ State on `<prefix>/state` every second and on every change; commands on
   length and then the bytes, like CIPSEND.
 * **`+MQTTSUBRECV:0,"topic",<len>,<data>` has to be parsed by length.** The
   payload can hold commas and newlines, so splitting on them loses messages.
-* **Buttons need edge detection.** Polling level alone repeats the action for
-  as long as a button is held; volume walked itself to 0 the first time.
+* **Buttons need edge detection**, which `poll_buttons` does — it acts on the
+  transition, not on the level, so holding `+` steps the volume once rather
+  than once per 120 ms poll.
+* **Report an empty button set as a word, not a dash.** `mqtt_probe.py` first
+  printed `-` for "nothing held", which is also the name of the `−` button.
+  A run where the volume stepped down five times read as a possible fault for
+  a while; it was five deliberate presses, shown in a column that could not
+  say so.
 * **Interrupt the previous beep.** `stopAll()` before playing the confirmation
   tone, or holding `+` queues one beep per step and they play long after the
   volume stopped moving.
